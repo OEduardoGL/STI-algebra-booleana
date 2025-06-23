@@ -4,7 +4,6 @@ from sympy.parsing.sympy_parser import (
 )
 
 def parse_raw(s: str):
-    # normaliza símbolos para & (AND), | (OR), ~ (NOT)
     s = (s.replace('⋅','&')
        .replace('·','&')
        .replace('.','&')
