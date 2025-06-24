@@ -2,7 +2,7 @@ from sympy import true, false
 from sympy.logic.boolalg import And, Or, Not
 from itertools import product
 import re
-from sti.formatter import format_expr
+from .formatter import format_expr
 
 def simplify(expr, log):
     if expr is true or expr is false or expr.is_Symbol:
