@@ -26,12 +26,8 @@ Uma ferramenta de linha de comando (CLI) desenvolvida em Python para auxiliar no
     cd STI-algebra-booleana-main
     ```
 
-2. **Crie o arquivo `requirements.txt`:**
-    ```text
-    sympy
-    ```
-
-3. **Instale as dependências:**
+    
+2. **Instale as dependências:**
     ```bash
     pip install -r requirements.txt
     ```
