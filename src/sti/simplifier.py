@@ -1,164 +1,172 @@
 from sympy import true, false
-from sympy.logic.boolalg import And, Or, Not
-from itertools import product
-import re
+from sympy.logic.boolalg import And, Or, Not, BooleanFunction
+from itertools import combinations, chain
+from collections import defaultdict
 from .formatter import format_expr
 
+# --- FUNÇÕES AUXILIARES PARA O ALGORITMO ---
+
+def get_vars_and_minterms(expr):
+    """Extrai as variáveis e os minterms (saídas verdadeiras da tabela-verdade) da expressão."""
+    variables = sorted(list(expr.atoms()), key=str)
+    minterms = []
+    
+    # Itera por todas as combinações da tabela-verdade
+    for i in range(2**len(variables)):
+        # Monta a substituição (ex: {A: True, B: False})
+        truth_values = {}
+        temp_i = i
+        for var in reversed(variables):
+            truth_values[var] = (temp_i % 2 == 1)
+            temp_i //= 2
+        
+        # Se a expressão for verdadeira para esta combinação, é um minterm
+        if expr.subs(truth_values) is true:
+            minterms.append(i)
+            
+    return variables, minterms
+
+def combine_terms(t1, t2):
+    """Compara dois termos. Se eles diferem por um bit, combina-os."""
+    diff_count = 0
+    diff_index = -1
+    for i in range(len(t1)):
+        if t1[i] != t2[i]:
+            diff_count += 1
+            diff_index = i
+    
+    if diff_count == 1:
+        new_term = list(t1)
+        new_term[diff_index] = '-'
+        return "".join(new_term)
+    return None
+
+def term_to_expr(variables, term_str):
+    """Converte uma string de termo (ex: '1-0') de volta para uma expressão sympy."""
+    lits = []
+    for i, char in enumerate(term_str):
+        if char == '1':
+            lits.append(variables[i])
+        elif char == '0':
+            lits.append(Not(variables[i]))
+    
+    if not lits: return true
+    if len(lits) == 1: return lits[0]
+    return And(*lits)
+
 def simplify(expr, log):
-    if expr is true or expr is false or expr.is_Symbol:
-        return expr
-    # NOT
-    if isinstance(expr, Not):
-        inner = simplify(expr.args[0], log)
-        if isinstance(inner, Not):
-            log.append(f"Involutiva: ¬(¬X) → X, onde X={format_expr(inner.args[0])}")
-            return simplify(inner.args[0], log)
-        if isinstance(inner, And):
-            seq = '+'.join(format_expr(Not(a)) for a in inner.args)
-            log.append(f"De Morgan: ¬({format_expr(expr.args[0])}) → {seq}")
-            return simplify(Or(*[Not(a) for a in inner.args]), log)
-        if isinstance(inner, Or):
-            seq = '*'.join(format_expr(Not(a)) for a in inner.args)
-            log.append(f"De Morgan: ¬({format_expr(expr.args[0])}) → {seq}")
-            return simplify(And(*[Not(a) for a in inner.args]), log)
-        if inner is true:
-            log.append("Negação: ¬1 → 0")
-            return false
-        if inner is false:
-            log.append("Negação: ¬0 → 1")
-            return true
-        return Not(inner)
-    # AND
-    if isinstance(expr, And):
-        terms = []
-        for sub in expr.args:
-            s = simplify(sub, log)
-            if isinstance(s, And): terms.extend(s.args)
-            else: terms.append(s)
-        # Nulidade
-        if false in terms:
-            log.append(f"Nulidade: contém 0 em {format_expr(expr)} → 0")
-            return false
-        # Identidade
-        if true in terms:
-            log.append(f"Identidade: remove 1 em {format_expr(expr)}")
-            terms = [t for t in terms if t is not true]
-        # Complementar
-        for t in terms:
-            if Not(t) in terms:
-                log.append(f"Complementar: {format_expr(t)}*{format_expr(Not(t))} → 0")
-                return false
-        # Idempotente
-        unique = []
-        for t in terms:
-            if t not in unique: unique.append(t)
-        if len(unique) < len(terms):
-            log.append(f"Idempotente: remove duplicatas em {format_expr(expr)}")
-        terms = unique
-        # Absorção
-        for t in terms:
-            if isinstance(t, Or) and any(lit in terms for lit in t.args):
-                chosen = next(lit for lit in t.args if lit in terms)
-                log.append(f"Absorção: {format_expr(expr)} → {format_expr(chosen)}")
-                return simplify(chosen, log)
-        # Distributiva parcial
-        for i,t in enumerate(terms):
-            if isinstance(t, Or):
-                rest = terms[:i] + terms[i+1:]
-                dist_terms = [simplify(And(lit, *rest), log) for lit in t.args]
-                log.append(f"Distributiva: {format_expr(expr)} → " +
-                           ' + '.join(format_expr(x) for x in dist_terms))
-                return simplify(Or(*dist_terms), log)
-        # Resultado
-        if not terms:
-            return true
-        if len(terms) == 1:
-            return terms[0]
-        return And(*terms)
-    # OR
-    if isinstance(expr, Or):
-        terms = []
-        for sub in expr.args:
-            s = simplify(sub, log)
-            if isinstance(s, Or): terms.extend(s.args)
-            else: terms.append(s)
-        # Nulidade
-        if true in terms:
-            log.append(f"Nulidade: contém 1 em {format_expr(expr)} → 1")
-            return true
-        # Identidade
-        if false in terms:
-            log.append(f"Identidade: remove 0 em {format_expr(expr)}")
-            terms = [t for t in terms if t is not false]
-        # Complementar
-        for t in terms:
-            if Not(t) in terms:
-                log.append(f"Complementar: {format_expr(t)}+{format_expr(Not(t))} → 1")
-                return true
-        # Idempotente
-        unique = []
-        for t in terms:
-            if t not in unique: unique.append(t)
-        if len(unique) < len(terms):
-            log.append(f"Idempotente: remove duplicatas em {format_expr(expr)}")
-        terms = unique
-        # Fator comum (A*B + A*~B → A)
-        for i in range(len(terms)):
-            for j in range(i+1, len(terms)):
-                t1, t2 = terms[i], terms[j]
-                if isinstance(t1, And) and isinstance(t2, And):
-                    a1, a2 = set(t1.args), set(t2.args)
-                    common = a1 & a2
-                    rem1, rem2 = a1-common, a2-common
-                    if len(common)==1 and len(rem1)==1 and len(rem2)==1:
-                        x1, x2 = next(iter(rem1)), next(iter(rem2))
-                        if x1 == Not(x2) or x2 == Not(x1):
-                            lit = next(iter(common))
-                            log.append(f"Fator comum: {format_expr(t1)}+{format_expr(t2)} → {format_expr(lit)}")
-                            new = [u for u in terms if u not in (t1, t2)] + [lit]
-                            return simplify(Or(*new), log)
-        # Absorção mista (A + ~A*X → A+X)
-        for lit in [t for t in terms if t.is_Symbol]:
-            for t in terms:
-                if isinstance(t, And) and Not(lit) in set(t.args):
-                    Xargs = [a for a in t.args if a != Not(lit)]
-                    Xprod = And(*Xargs) if len(Xargs)>1 else Xargs[0]
-                    log.append(f"Absorção mista: {format_expr(expr)} → {format_expr(lit)}+{format_expr(Xprod)}")
-                    new_terms = [u for u in terms if u != t]
-                    if Xprod not in new_terms: new_terms.append(Xprod)
-                    return simplify(Or(*new_terms), log)
-        # Subsunção
-        filtered = []
-        for ti in terms:
-            ai = set(ti.args) if isinstance(ti, And) else {ti}
-            subs = any((aj := set(tj.args) if isinstance(tj, And) else {tj}).issubset(ai)
-                       and tj is not ti for tj in terms)
-            if not subs: filtered.append(ti)
-        if len(filtered) < len(terms):
-            log.append(f"Subsunção: remove termos em {format_expr(expr)}")
-        terms = filtered
-        # Consenso
-        new_terms = terms.copy()
-        for t1 in terms:
-            for t2 in terms:
-                if isinstance(t1, And) and isinstance(t2, And):
-                    a1, a2 = set(t1.args), set(t2.args)
-                    for lit in a1:
-                        if Not(lit) in a2:
-                            y, z = a1-{lit}, a2-{Not(lit)}
-                            if len(y)==len(z)==1:
-                                cons = simplify(And(*y,*z), log)
-                                if cons in new_terms:
-                                    log.append(f"Consenso: remove {format_expr(cons)} em {format_expr(expr)}")
-                                    new_terms.remove(cons)
-        terms = new_terms
-        # Absorção final
-        simples = [t for t in terms if not isinstance(t, And)]
-        final = [t for t in terms if not(isinstance(t, And)
-                                         and any(lit in simples for lit in t.args))]
-        if len(final) < len(terms): log.append(f"Absorção final: remove termos em {format_expr(expr)}")
-        terms = final
-        if not terms: return false
-        if len(terms) == 1: return terms[0]
-        return Or(*terms)
-    return expr
+    # 1. Obter Variáveis e Minterms
+    variables, minterms = get_vars_and_minterms(expr)
+    num_vars = len(variables)
+    
+    if not minterms: return false # Se não há saídas verdadeiras, o resultado é Falso
+    if len(minterms) == 2**num_vars: return true # Se todas as saídas são verdadeiras, o resultado é Verdadeiro
+
+    log.append({'rule': 'Minterms', 'details': f"Variáveis: {', '.join(map(str, variables))}, Minterms: {minterms}"})
+
+    # 2. Agrupar Minterms pelo número de '1's
+    groups = defaultdict(list)
+    for mt in minterms:
+        # Converte o minterm para binário, ex: 5 -> '0101'
+        binary_str = format(mt, f'0{num_vars}b')
+        groups[binary_str.count('1')].append(binary_str)
+
+    # 3. Gerar Implicantes Primos
+    prime_implicants = set()
+    
+    current_groups = groups
+    while True:
+        next_groups = defaultdict(list)
+        used_terms = set()
+        
+        # Compara grupos adjacentes
+        sorted_keys = sorted(current_groups.keys())
+        for i in range(len(sorted_keys) - 1):
+            key1, key2 = sorted_keys[i], sorted_keys[i+1]
+            for term1 in current_groups[key1]:
+                for term2 in current_groups[key2]:
+                    combined = combine_terms(term1, term2)
+                    if combined:
+                        next_groups[combined.count('1')].append(combined)
+                        used_terms.add(term1)
+                        used_terms.add(term2)
+        
+        # Adiciona termos que não puderam ser combinados (são implicantes primos)
+        for key in current_groups:
+            for term in current_groups[key]:
+                if term not in used_terms:
+                    prime_implicants.add(term)
+        
+        if not next_groups:
+            break
+        
+        # Remove duplicatas nos próximos grupos
+        for key in next_groups:
+            next_groups[key] = sorted(list(set(next_groups[key])))
+        
+        current_groups = next_groups
+
+    log.append({'rule': 'Implicantes Primos', 'details': ', '.join(map(str, prime_implicants))})
+
+    # 4. Tabela de Cobertura (Prime Implicant Chart)
+    chart = defaultdict(list)
+    for mt in minterms:
+        binary_mt = format(mt, f'0{num_vars}b')
+        for pi in prime_implicants:
+            # Verifica se o implicante primo "cobre" o minterm
+            covers = all(pi[i] == '-' or pi[i] == binary_mt[i] for i in range(num_vars))
+            if covers:
+                chart[mt].append(pi)
+    
+    # 5. Encontrar a Cobertura Mínima
+    # Primeiro, encontra os Implicantes Essenciais
+    essential_pis = set()
+    for mt in chart:
+        if len(chart[mt]) == 1:
+            essential_pis.add(chart[mt][0])
+    
+    log.append({'rule': 'Implicantes Essenciais', 'details': ', '.join(map(str, essential_pis))})
+
+    # Cobre os minterms com os implicantes essenciais
+    covered_minterms = set()
+    for pi in essential_pis:
+        for mt in minterms:
+            binary_mt = format(mt, f'0{num_vars}b')
+            if all(pi[i] == '-' or pi[i] == binary_mt[i] for i in range(num_vars)):
+                covered_minterms.add(mt)
+    
+    uncovered_minterms = set(minterms) - covered_minterms
+    
+    # Se ainda faltar cobrir minterms, resolve com os implicantes restantes (Petrick's Method simplificado)
+    final_pis = set(essential_pis)
+    if uncovered_minterms:
+        remaining_pis = prime_implicants - essential_pis
+        
+        # Encontra a melhor combinação de implicantes restantes para cobrir o que falta
+        # (Esta é uma versão simplificada, para casos mais complexos, um algoritmo recursivo é necessário)
+        # Para a maioria dos casos de sala de aula, isso é suficiente.
+        
+        # Ordena os implicantes restantes por quantos novos minterms eles cobrem
+        pi_coverage = {pi: sum(1 for mt in uncovered_minterms if pi in chart[mt]) for pi in remaining_pis}
+        sorted_pis = sorted(remaining_pis, key=lambda p: pi_coverage[p], reverse=True)
+        
+        temp_uncovered = set(uncovered_minterms)
+        for pi in sorted_pis:
+            if not temp_uncovered: break
+            # Se o implicante cobre algum minterm que ainda falta, adicione-o
+            if any(pi in chart[mt] for mt in temp_uncovered):
+                final_pis.add(pi)
+                for mt in list(temp_uncovered):
+                    if pi in chart[mt]:
+                        temp_uncovered.remove(mt)
+
+
+    # 6. Construir a Expressão Final
+    final_terms_expr = [term_to_expr(variables, pi) for pi in final_pis]
+    
+    if not final_terms_expr: return false
+    final_expr = Or(*final_terms_expr)
+
+    log.append({'rule': 'Resultado Final', 'details': format_expr(final_expr)})
+
+    return final_expr
