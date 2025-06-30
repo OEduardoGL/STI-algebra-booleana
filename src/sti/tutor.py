@@ -206,21 +206,16 @@ def print_didactic_simplification(result):
     return regras_aplicadas
 
 def run_interactive_tutor(usuario_id):
-    """
-    Modo de tutoria que seleciona uma questão baseada no nível de habilidade do usuário.
-    """
     nivel_habilidade_atual = database.get_user_skill(usuario_id)
     print(f"\nBuscando uma questão ideal para seu nível de habilidade ({nivel_habilidade_atual:.2f})...")
 
     MODEL_PATH = 'modelo_tutor.pkl'
-    nivel_habilidade_atual = database.get_user_skill(usuario_id)
     
-    # 1. Seleciona a questão
     if os.path.exists(MODEL_PATH):
         print(f"\n(Usando seletor com Machine Learning para seu nível {nivel_habilidade_atual:.2f})")
         questao = select_ideal_question_ml(usuario_id, nivel_habilidade_atual)
     else:
-        print(f"\n(Aviso: Modelo de ML não encontrado. Usando seletor algorítmico para seu nível {nivel_habilidade_atual:.2f})")
+        print(f"\n(Modelo de ML não encontrado. Usando seletor algorítmico para seu nível {nivel_habilidade_atual:.2f})")
         questao = select_ideal_question_algoritmica(usuario_id, nivel_habilidade_atual)
 
     if questao is None:
@@ -229,25 +224,48 @@ def run_interactive_tutor(usuario_id):
 
     s_inicial = questao['expressao']
     solucao_correta_gabarito = parse_raw(questao['solucao'])
-    
-    # 2. Apresenta a questão ao usuário
-    print("-" * 20)
-    print(f"Questão (Dificuldade: {questao['dificuldade']}, Foco: {questao['lei']})")
+    lei = questao['lei']
+
+    print("-" * 40)
+    print(f"Questão (Dificuldade: {questao['dificuldade']}, Lei principal: {lei})")
     print(f"Simplifique a expressão: {s_inicial}")
-    print("Simplifique a expressão passo a passo. Digite 'fim' quando achar que chegou na forma mais simples.")
-    print("-" * 20)
-    
+    print("Quando terminar, digite 'fim'. Se quiser desistir, digite 'desisto'.")
+    print("-" * 40)
+
     expr_inicial_sympy = parse_raw(s_inicial)
     expressao_atual_sympy = expr_inicial_sympy
     expressao_atual_str = s_inicial
     passos_aluno = []
 
-    # 3. Loop de resolução (lógica que você já tinha)
+    LEIS_DIDATICAS = {
+        "Idempotência": "A + A = A ou A * A = A. Unir o mesmo termo não muda o resultado.",
+        "Complemento": "A + ~A = 1 e A * ~A = 0. Um termo e seu complemento anulam ou totalizam.",
+        "Absorção": "A + A*B = A. O termo principal absorve o termo composto.",
+        "Adjacência": "A*B + A*~B = A. Combina termos com a mesma variável principal.",
+        "Dupla Negação": "~~A = A. Duas negações cancelam.",
+        "Aniquilação": "A * 0 = 0 e A + 1 = 1. O neutro destrói o termo.",
+        "Identidade": "A * 1 = A e A + 0 = A. O neutro mantém o termo.",
+        "De Morgan": "~(A * B) = ~A + ~B e ~(A + B) = ~A * ~B. Distribui a negação trocando operações.",
+        "Distributiva": "A*(B+C)=A*B+A*C. Distribui multiplicação sobre soma.",
+        "Consenso": "A*B + ~A*C + B*C = A*B + ~A*C. Remove termos redundantes.",
+    }
+
     while True:
         s_passo_aluno = input(f"Expressão Atual ({expressao_atual_str}) -> Seu passo: ")
         if s_passo_aluno.lower().strip() == 'fim':
             break
-        # ... (aqui entra sua lógica de validar cada passo do aluno)
+        elif s_passo_aluno.lower().strip() == 'desisto':
+            print("\nEntendido, vamos encerrar essa questão.")
+            print(f"A forma mínima correta seria: {questao['solucao']}")
+            database.update_user_skill(usuario_id, False, questao['dificuldade'])
+            detalhes = {"passos_do_aluno": passos_aluno, "solucao_final_aluno": expressao_atual_str, "acertou": False}
+            database.salvar_interacao(
+                usuario_id=usuario_id, operacao="Tutor Inteligente",
+                expressao_inicial=s_inicial, resultado_final="Desistiu",
+                dificuldade=questao['dificuldade'], passos=len(passos_aluno),
+                detalhes_dict=detalhes
+            )
+            return
         try:
             passo_sympy = parse_raw(s_passo_aluno)
             if find_counterexample(expressao_atual_sympy, passo_sympy) is None:
@@ -257,33 +275,13 @@ def run_interactive_tutor(usuario_id):
                 passos_aluno.append(s_passo_aluno)
             else:
                 print("✗ Passo INVÁLIDO!")
+                print(f"Dica: Esta questão usa a Lei da {lei}.")
+                for sublei in lei.split("/"):
+                    explic = LEIS_DIDATICAS.get(sublei.strip(), "(sem explicação detalhada)")
+                    print(f"- {sublei.strip()}: {explic}")
+                print("Tente pensar em como aplicar isso na expressão para simplificá-la.\n")
         except Exception:
-            print("✗ Erro de sintaxe.")
-
-    # 4. Avalia a resposta final e atualiza o nível
-    print("\n--- Fim do Exercício ---")
-    print(f"Sua resposta final: {expressao_atual_str}")
-    print(f"A resposta correta é: {questao['solucao']}")
-
-    acertou = find_counterexample(expressao_atual_sympy, solucao_correta_gabarito) is None
-    
-    if acertou:
-        print("🎉 PARABÉNS! Você acertou!")
-        resultado_final = "Correto"
-    else:
-        print("Você não chegou na forma mínima correta. Continue praticando!")
-        resultado_final = "Incorreto"
-
-    database.update_user_skill(usuario_id, acertou, questao['dificuldade'])
-    
-    # 5. Salva a interação no histórico
-    detalhes = {"passos_do_aluno": passos_aluno, "solucao_final_aluno": expressao_atual_str, "acertou": acertou}
-    database.salvar_interacao(
-        usuario_id=usuario_id, operacao="Tutor Inteligente",
-        expressao_inicial=s_inicial, resultado_final=resultado_final,
-        dificuldade=questao['dificuldade'], passos=len(passos_aluno),
-        detalhes_dict=detalhes
-    )
+            print("✗ Erro de sintaxe. Verifique sua expressão.")
 
 
 def run_cli():
