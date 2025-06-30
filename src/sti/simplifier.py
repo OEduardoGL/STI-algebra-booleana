@@ -1,5 +1,8 @@
+# Arquivo: src/sti/simplifier.py
+# --- VERSÃO FINAL COM QUINE-MCCLUSKEY CORRETO E ROBUSTO ---
+
 from sympy import true, false
-from sympy.logic.boolalg import And, Or, Not, BooleanFunction
+from sympy.logic.boolalg import And, Or, Not
 from itertools import combinations, chain
 from collections import defaultdict
 from .formatter import format_expr
@@ -7,38 +10,36 @@ from .formatter import format_expr
 # --- FUNÇÕES AUXILIARES PARA O ALGORITMO ---
 
 def get_vars_and_minterms(expr):
-    """Extrai as variáveis e os minterms (saídas verdadeiras da tabela-verdade) da expressão."""
-    variables = sorted(list(expr.atoms()), key=str)
-    minterms = []
-    
-    # Itera por todas as combinações da tabela-verdade
-    for i in range(2**len(variables)):
-        # Monta a substituição (ex: {A: True, B: False})
-        truth_values = {}
-        temp_i = i
-        for var in reversed(variables):
-            truth_values[var] = (temp_i % 2 == 1)
-            temp_i //= 2
+    """Extrai as variáveis e os minterms (saídas verdadeiras) da expressão."""
+    try:
+        variables = sorted(list(expr.atoms()), key=str)
+    except Exception:
+        if expr is true: return [], [0]
+        if expr is false: return [], []
+        variables = [expr] if expr.is_Symbol else []
         
-        # Se a expressão for verdadeira para esta combinação, é um minterm
-        if expr.subs(truth_values) is true:
+    minterms = []
+    if not variables:
+        return [], [0] if expr is true else []
+
+    num_vars = len(variables)
+    for i in range(2**num_vars):
+        truth_values = {var: (i >> j) & 1 for j, var in enumerate(reversed(variables))}
+        if expr.subs(truth_values) == True:
             minterms.append(i)
             
     return variables, minterms
 
 def combine_terms(t1, t2):
-    """Compara dois termos. Se eles diferem por um bit, combina-os."""
-    diff_count = 0
-    diff_index = -1
+    """Compara dois termos binários. Se diferem por um bit, combina-os."""
+    diff = 0
+    pos = -1
     for i in range(len(t1)):
         if t1[i] != t2[i]:
-            diff_count += 1
-            diff_index = i
-    
-    if diff_count == 1:
-        new_term = list(t1)
-        new_term[diff_index] = '-'
-        return "".join(new_term)
+            diff += 1
+            pos = i
+    if diff == 1:
+        return t1[:pos] + '-' + t1[pos+1:]
     return None
 
 def term_to_expr(variables, term_str):
@@ -51,122 +52,133 @@ def term_to_expr(variables, term_str):
             lits.append(Not(variables[i]))
     
     if not lits: return true
-    if len(lits) == 1: return lits[0]
-    return And(*lits)
+    return And(*lits) if len(lits) > 1 else lits[0]
 
-def simplify(expr, log):
-    # 1. Obter Variáveis e Minterms
+def solve_petrick(chart, uncovered_minterms, remaining_pis):
+    """Resolve a cobertura usando o Método de Petrick para garantir a solução mínima."""
+    if not uncovered_minterms:
+        return set()
+        
+    P = []
+    for mt in sorted(list(uncovered_minterms)):
+        # Cria um termo de soma para cada minterm (ex: P1+P2)
+        P.append([pi for pi in remaining_pis if pi in chart[mt]])
+    
+    # Expande a expressão (P1+P2)*(P3+P4) -> P1P3+P1P4+P2P3+P2P4
+    while len(P) > 1:
+        p1 = P.pop(0)
+        p2 = P.pop(0)
+        res = set()
+        for i1 in p1:
+            for i2 in p2:
+                # Usa um conjunto para que A*A=A
+                if isinstance(i1, set):
+                    term = set(i1)
+                else:
+                    term = {i1}
+                if isinstance(i2, set):
+                    term.update(i2)
+                else:
+                    term.add(i2)
+                res.add(frozenset(term)) # Usa frozenset para poder adicionar a um conjunto
+        P.insert(0, list(res))
+
+    # Encontra o termo com o menor número de implicantes
+    min_len = float('inf')
+    best_solution = None
+    for term_set in P[0]:
+        if len(term_set) < min_len:
+            min_len = len(term_set)
+            best_solution = term_set
+            
+    return set(best_solution)
+
+# --- FUNÇÃO PRINCIPAL DO SIMPLIFICADOR ---
+def simplify(expr):
+    """
+    Simplifica a expressão booleana usando Quine-McCluskey e retorna um 
+    dicionário com todos os passos intermediários para a impressão didática.
+    """
     variables, minterms = get_vars_and_minterms(expr)
     num_vars = len(variables)
     
-    if not minterms: return false # Se não há saídas verdadeiras, o resultado é Falso
-    if len(minterms) == 2**num_vars: return true # Se todas as saídas são verdadeiras, o resultado é Verdadeiro
+    # Casos triviais
+    if not minterms: 
+        return {"final_sop": false, "steps": "Expressão resulta em Falso."}
+    if len(minterms) == 2**num_vars: 
+        return {"final_sop": true, "steps": "Expressão resulta em Verdadeiro."}
 
-    log.append({'rule': 'Minterms', 'details': f"Variáveis: {', '.join(map(str, variables))}, Minterms: {minterms}"})
-
-    # 2. Agrupar Minterms pelo número de '1's
+    # 1. Agrupar Minterms
     groups = defaultdict(list)
     for mt in minterms:
-        # Converte o minterm para binário, ex: 5 -> '0101'
         binary_str = format(mt, f'0{num_vars}b')
         groups[binary_str.count('1')].append(binary_str)
 
-    # 3. Gerar Implicantes Primos
-    prime_implicants = set()
-    
+    # --- ADICIONADO 1/3: Inicializa o log de combinações ---
+    combination_log = []
+
+    # 2. Gerar Implicantes Primos
+    prime_implicants_str = set()
     current_groups = groups
     while True:
         next_groups = defaultdict(list)
         used_terms = set()
         
-        # Compara grupos adjacentes
         sorted_keys = sorted(current_groups.keys())
         for i in range(len(sorted_keys) - 1):
-            key1, key2 = sorted_keys[i], sorted_keys[i+1]
-            for term1 in current_groups[key1]:
-                for term2 in current_groups[key2]:
+            for term1 in current_groups[sorted_keys[i]]:
+                for term2 in current_groups[sorted_keys[i+1]]:
                     combined = combine_terms(term1, term2)
                     if combined:
                         next_groups[combined.count('1')].append(combined)
                         used_terms.add(term1)
                         used_terms.add(term2)
+                        # --- ADICIONADO 2/3: Registra o passo de combinação no log ---
+                        combination_log.append({'before': sorted([term1, term2]), 'after': combined})
         
-        # Adiciona termos que não puderam ser combinados (são implicantes primos)
         for key in current_groups:
             for term in current_groups[key]:
                 if term not in used_terms:
-                    prime_implicants.add(term)
+                    prime_implicants_str.add(term)
         
-        if not next_groups:
-            break
-        
-        # Remove duplicatas nos próximos grupos
-        for key in next_groups:
-            next_groups[key] = sorted(list(set(next_groups[key])))
-        
-        current_groups = next_groups
+        if not next_groups: break
+        current_groups = {k: sorted(list(set(v))) for k, v in next_groups.items()}
 
-    log.append({'rule': 'Implicantes Primos', 'details': ', '.join(map(str, prime_implicants))})
-
-    # 4. Tabela de Cobertura (Prime Implicant Chart)
-    chart = defaultdict(list)
-    for mt in minterms:
-        binary_mt = format(mt, f'0{num_vars}b')
-        for pi in prime_implicants:
-            # Verifica se o implicante primo "cobre" o minterm
-            covers = all(pi[i] == '-' or pi[i] == binary_mt[i] for i in range(num_vars))
-            if covers:
-                chart[mt].append(pi)
+    # 3. Tabela de Cobertura
+    chart = {mt: [pi for pi in prime_implicants_str if all(pi[i] == '-' or pi[i] == format(mt, f'0{num_vars}b')[i] for i in range(num_vars))] for mt in minterms}
     
-    # 5. Encontrar a Cobertura Mínima
-    # Primeiro, encontra os Implicantes Essenciais
-    essential_pis = set()
-    for mt in chart:
-        if len(chart[mt]) == 1:
-            essential_pis.add(chart[mt][0])
+    # 4. Encontrar Implicantes Essenciais
+    essential_pis_str = set()
+    for mt, pis in chart.items():
+        if len(pis) == 1:
+            essential_pis_str.add(pis[0])
     
-    log.append({'rule': 'Implicantes Essenciais', 'details': ', '.join(map(str, essential_pis))})
-
-    # Cobre os minterms com os implicantes essenciais
+    # 5. Cobrir e Resolver o Restante (Método de Petrick)
     covered_minterms = set()
-    for pi in essential_pis:
+    for pi in essential_pis_str:
         for mt in minterms:
-            binary_mt = format(mt, f'0{num_vars}b')
-            if all(pi[i] == '-' or pi[i] == binary_mt[i] for i in range(num_vars)):
+            if pi in chart[mt]:
                 covered_minterms.add(mt)
     
     uncovered_minterms = set(minterms) - covered_minterms
+    final_pis_str = set(essential_pis_str)
     
-    # Se ainda faltar cobrir minterms, resolve com os implicantes restantes (Petrick's Method simplificado)
-    final_pis = set(essential_pis)
     if uncovered_minterms:
-        remaining_pis = prime_implicants - essential_pis
-        
-        # Encontra a melhor combinação de implicantes restantes para cobrir o que falta
-        # (Esta é uma versão simplificada, para casos mais complexos, um algoritmo recursivo é necessário)
-        # Para a maioria dos casos de sala de aula, isso é suficiente.
-        
-        # Ordena os implicantes restantes por quantos novos minterms eles cobrem
-        pi_coverage = {pi: sum(1 for mt in uncovered_minterms if pi in chart[mt]) for pi in remaining_pis}
-        sorted_pis = sorted(remaining_pis, key=lambda p: pi_coverage[p], reverse=True)
-        
-        temp_uncovered = set(uncovered_minterms)
-        for pi in sorted_pis:
-            if not temp_uncovered: break
-            # Se o implicante cobre algum minterm que ainda falta, adicione-o
-            if any(pi in chart[mt] for mt in temp_uncovered):
-                final_pis.add(pi)
-                for mt in list(temp_uncovered):
-                    if pi in chart[mt]:
-                        temp_uncovered.remove(mt)
-
+        remaining_pis = prime_implicants_str - essential_pis_str
+        cover_solution = solve_petrick(chart, uncovered_minterms, remaining_pis)
+        final_pis_str.update(cover_solution)
 
     # 6. Construir a Expressão Final
-    final_terms_expr = [term_to_expr(variables, pi) for pi in final_pis]
-    
-    if not final_terms_expr: return false
-    final_expr = Or(*final_terms_expr)
+    final_terms_expr = [term_to_expr(variables, pi) for pi in final_pis_str]
+    final_expr = Or(*final_terms_expr) if len(final_terms_expr) > 1 else (final_terms_expr[0] if final_terms_expr else false)
 
-    log.append({'rule': 'Resultado Final', 'details': format_expr(final_expr)})
-
-    return final_expr
+    # 7. Montar o dicionário de resultados
+    result_data = {
+        "initial_expr": expr,
+        "variables": variables,
+        "minterms": minterms,
+        # --- ADICIONADO 3/3: Inclui o log de combinações no resultado final ---
+        "combination_log": combination_log,
+        "final_sop": final_expr,
+    }
+    return result_data
