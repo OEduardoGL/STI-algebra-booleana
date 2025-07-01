@@ -210,78 +210,95 @@ def run_interactive_tutor(usuario_id):
     print(f"\nBuscando uma questão ideal para seu nível de habilidade ({nivel_habilidade_atual:.2f})...")
 
     MODEL_PATH = 'modelo_tutor.pkl'
-    
     if os.path.exists(MODEL_PATH):
-        print(f"\n(Usando seletor com Machine Learning para seu nível {nivel_habilidade_atual:.2f})")
         questao = select_ideal_question_ml(usuario_id, nivel_habilidade_atual)
     else:
-        print(f"\n(Modelo de ML não encontrado. Usando seletor algorítmico para seu nível {nivel_habilidade_atual:.2f})")
         questao = select_ideal_question_algoritmica(usuario_id, nivel_habilidade_atual)
 
-    if questao is None:
-        print("\nParabéns! Parece que você já respondeu todas as questões disponíveis.")
+    if not questao:
+        print("\nParabéns! Você já respondeu todas as questões disponíveis.")
         return
 
     s_inicial = questao['expressao']
-    solucao_correta_gabarito = parse_raw(questao['solucao'])
+    solucao_correta = parse_raw(questao['solucao'])
     lei = questao['lei']
 
-    print("-" * 40)
-    print(f"Questão (Dificuldade: {questao['dificuldade']}, Lei principal: {lei})")
-    print(f"Simplifique a expressão: {s_inicial}")
-    print("Quando terminar, digite 'fim'. Se quiser desistir, digite 'desisto'.")
-    print("-" * 40)
-
-    expr_inicial_sympy = parse_raw(s_inicial)
-    expressao_atual_sympy = expr_inicial_sympy
-    expressao_atual_str = s_inicial
-    passos_aluno = []
-
     LEIS_DIDATICAS = {
-        "Idempotência": "A + A = A ou A * A = A. Unir o mesmo termo não muda o resultado.",
-        "Complemento": "A + ~A = 1 e A * ~A = 0. Um termo e seu complemento anulam ou totalizam.",
-        "Absorção": "A + A*B = A. O termo principal absorve o termo composto.",
-        "Adjacência": "A*B + A*~B = A. Combina termos com a mesma variável principal.",
-        "Dupla Negação": "~~A = A. Duas negações cancelam.",
-        "Aniquilação": "A * 0 = 0 e A + 1 = 1. O neutro destrói o termo.",
-        "Identidade": "A * 1 = A e A + 0 = A. O neutro mantém o termo.",
-        "De Morgan": "~(A * B) = ~A + ~B e ~(A + B) = ~A * ~B. Distribui a negação trocando operações.",
-        "Distributiva": "A*(B+C)=A*B+A*C. Distribui multiplicação sobre soma.",
-        "Consenso": "A*B + ~A*C + B*C = A*B + ~A*C. Remove termos redundantes.",
+        "Idempotência":    "A + A = A ou A * A = A. Unir o mesmo termo não muda o resultado.",
+        "Complemento":     "A + ~A = 1 e A * ~A = 0. Um termo e seu complemento anulam ou totalizam.",
+        "Absorção":        "A + A*B = A. O termo principal absorve o termo composto.",
+        "Adjacência":      "A*B + A*~B = A. Combina termos com a mesma variável principal.",
+        "Dupla Negação":   "~~A = A. Duas negações cancelam.",
+        "Aniquilação":     "A * 0 = 0 e A + 1 = 1. O neutro destrói o termo.",
+        "Identidade":      "A * 1 = A e A + 0 = A. O neutro mantém o termo.",
+        "De Morgan":       "~(A * B) = ~A + ~B e ~(A + B) = ~A * ~B. Distribui a negação trocando operações.",
+        "Distributiva":    "A*(B+C) = A*B + A*C. Distribui multiplicação sobre soma.",
+        "Consenso":        "A*B + ~A*C + B*C = A*B + ~A*C. Remove termos redundantes.",
     }
 
+    print("\n" + "-"*40)
+    print(f"Questão (Dificuldade: {questao['dificuldade']}, Lei: {lei})")
+    print(f"Simplifique: {s_inicial}")
+    print("Digite um passo de simplificação de cada vez.")
+    print("    → Digite 'fim' apenas quando achar que já está na forma mínima.")
+    print("    → Digite 'desisto' para ver a resposta correta.")
+    print("-"*40)
+
+    expr_atual = parse_raw(s_inicial)
+    expr_str = s_inicial
+    passos = []
+
     while True:
-        s_passo_aluno = input(f"Expressão Atual ({expressao_atual_str}) -> Seu passo: ")
-        if s_passo_aluno.lower().strip() == 'fim':
-            break
-        elif s_passo_aluno.lower().strip() == 'desisto':
-            print("\nEntendido, vamos encerrar essa questão.")
-            print(f"A forma mínima correta seria: {questao['solucao']}")
+        tentativa = input(f"Expressão Atual ({expr_str}) → Seu passo: ").strip()
+        lower = tentativa.lower()
+
+        # usuário desiste
+        if lower == 'desisto':
+            print(f"\nTudo bem. A forma mínima correta é: {questao['solucao']}")
             database.update_user_skill(usuario_id, False, questao['dificuldade'])
-            detalhes = {"passos_do_aluno": passos_aluno, "solucao_final_aluno": expressao_atual_str, "acertou": False}
+            detalhes = {"passos": passos, "solucao_usuario": expr_str, "acertou": False}
             database.salvar_interacao(
-                usuario_id=usuario_id, operacao="Tutor Inteligente",
-                expressao_inicial=s_inicial, resultado_final="Desistiu",
-                dificuldade=questao['dificuldade'], passos=len(passos_aluno),
-                detalhes_dict=detalhes
+                usuario_id, "Tutor Inteligente", s_inicial,
+                "Desistiu", questao['dificuldade'], len(passos), detalhes
             )
             return
+
+        # usuário acha que terminou
+        if lower == 'fim':
+            # verifica se expressao atual é igual ao gabarito
+            if find_counterexample(expr_atual, solucao_correta) is None:
+                print(f"\n🎉 Parabéns! Você chegou à forma mínima em {len(passos)} passo(s)!")
+                database.update_user_skill(usuario_id, True, questao['dificuldade'])
+                detalhes = {"passos": passos, "solucao_usuario": expr_str, "acertou": True}
+                database.salvar_interacao(
+                    usuario_id, "Tutor Inteligente", s_inicial,
+                    "Correto", questao['dificuldade'], len(passos), detalhes
+                )
+                return
+            else:
+                print("\n😕 Ainda não está na forma mínima.")
+                print(f"Dica extra: use a(s) lei(s) abaixo para continuar simplificando:")
+                for sublei in lei.split("/"):
+                    explic = LEIS_DIDATICAS.get(sublei.strip(), "Sem explicação detalhada.")
+                    print(f" - {sublei.strip()}: {explic}")
+                continue  # volta para o mesmo loop de passos
+
+        # tentativa de passo intermediário
         try:
-            passo_sympy = parse_raw(s_passo_aluno)
-            if find_counterexample(expressao_atual_sympy, passo_sympy) is None:
+            passo_expr = parse_raw(tentativa)
+            if find_counterexample(expr_atual, passo_expr) is None:
                 print("✓ Passo VÁLIDO!")
-                expressao_atual_sympy = passo_sympy
-                expressao_atual_str = s_passo_aluno
-                passos_aluno.append(s_passo_aluno)
+                expr_atual = passo_expr
+                expr_str = tentativa
+                passos.append(tentativa)
             else:
                 print("✗ Passo INVÁLIDO!")
-                print(f"Dica: Esta questão usa a Lei da {lei}.")
+                print(f"Dica: esta questão envolve a(s) lei(s) de {lei}.")
                 for sublei in lei.split("/"):
-                    explic = LEIS_DIDATICAS.get(sublei.strip(), "(sem explicação detalhada)")
-                    print(f"- {sublei.strip()}: {explic}")
-                print("Tente pensar em como aplicar isso na expressão para simplificá-la.\n")
+                    explic = LEIS_DIDATICAS.get(sublei.strip(), "Sem explicação detalhada.")
+                    print(f" - {sublei.strip()}: {explic}")
         except Exception:
-            print("✗ Erro de sintaxe. Verifique sua expressão.")
+            print("✗ Erro de sintaxe. Verifique os parênteses e operadores.")
 
 
 def run_cli():
@@ -402,3 +419,4 @@ def run_cli():
 if __name__ == '__main__':
 
     run_cli()
+    
