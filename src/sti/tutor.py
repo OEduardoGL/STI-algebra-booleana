@@ -221,6 +221,8 @@ def run_interactive_tutor(usuario_id):
 
     s_inicial = questao['expressao']
     solucao_correta = parse_raw(questao['solucao'])
+    solucao_str = format_expr(solucao_correta)     
+    solucao_lower = solucao_str.lower()
     lei = questao['lei']
 
     LEIS_DIDATICAS = {
@@ -234,72 +236,92 @@ def run_interactive_tutor(usuario_id):
         "De Morgan":       "~(A * B) = ~A + ~B e ~(A + B) = ~A * ~B. Distribui a negação trocando operações.",
         "Distributiva":    "A*(B+C) = A*B + A*C. Distribui multiplicação sobre soma.",
         "Consenso":        "A*B + ~A*C + B*C = A*B + ~A*C. Remove termos redundantes.",
+        "Absorção Mista":  "A + (¬A·B) = (A+¬A)·(A+B) → 1·(A+B) → A+B."
     }
+
+    SINONIMOS_TRUE  = {'true', '1'}
+    SINONIMOS_FALSE = {'false', '0'}
 
     print("\n" + "-"*40)
     print(f"Questão (Dificuldade: {questao['dificuldade']}, Lei: {lei})")
     print(f"Simplifique: {s_inicial}")
-    print("Digite um passo de simplificação de cada vez.")
-    print("    → Digite 'fim' apenas quando achar que já está na forma mínima.")
-    print("    → Digite 'desisto' para ver a resposta correta.")
+    print("→ Digite um passo de cada vez.")
+    print("→ Quando achar que está na forma mínima, digite 'fim'.")
+    print("→ Se quiser desistir, digite 'desisto'.")
     print("-"*40)
 
     expr_atual = parse_raw(s_inicial)
-    expr_str = s_inicial
-    passos = []
+    expr_str   = s_inicial
+    passos     = []
 
     while True:
         tentativa = input(f"Expressão Atual ({expr_str}) → Seu passo: ").strip()
-        lower = tentativa.lower()
 
-        # usuário desiste
-        if lower == 'desisto':
-            print(f"\nTudo bem. A forma mínima correta é: {questao['solucao']}")
+        # desistir
+        if tentativa.lower() == 'desisto':
+            print(f"\nTudo bem. A forma mínima correta é: {solucao_str}")
             database.update_user_skill(usuario_id, False, questao['dificuldade'])
-            detalhes = {"passos": passos, "solucao_usuario": expr_str, "acertou": False}
             database.salvar_interacao(
                 usuario_id, "Tutor Inteligente", s_inicial,
-                "Desistiu", questao['dificuldade'], len(passos), detalhes
+                "Desistiu", questao['dificuldade'], len(passos),
+                {"passos": passos, "solucao_usuario": expr_str, "acertou": False}
             )
             return
 
-        # usuário acha que terminou
-        if lower == 'fim':
-            # verifica se expressao atual é igual ao gabarito
-            if find_counterexample(expr_atual, solucao_correta) is None:
+        # finalizar
+        if tentativa.lower() == 'fim':
+            fmt = format_expr(expr_atual)
+            fmt_lower = fmt.lower()
+            ok_str = (
+                fmt_lower == solucao_lower or
+                (solucao_lower == 'true'  and fmt_lower in SINONIMOS_TRUE) or
+                (solucao_lower == 'false' and fmt_lower in SINONIMOS_FALSE)
+            )
+            if ok_str:
                 print(f"\n🎉 Parabéns! Você chegou à forma mínima em {len(passos)} passo(s)!")
                 database.update_user_skill(usuario_id, True, questao['dificuldade'])
-                detalhes = {"passos": passos, "solucao_usuario": expr_str, "acertou": True}
                 database.salvar_interacao(
                     usuario_id, "Tutor Inteligente", s_inicial,
-                    "Correto", questao['dificuldade'], len(passos), detalhes
+                    "Correto", questao['dificuldade'], len(passos),
+                    {"passos": passos, "solucao_usuario": expr_str, "acertou": True}
                 )
                 return
             else:
-                print("\n😕 Ainda não está na forma mínima.")
-                print(f"Dica extra: use a(s) lei(s) abaixo para continuar simplificando:")
+                print("\n😕 Ainda não está na forma mínima esperada.")
+                print("Dica extra: use a(s) lei(s) abaixo para continuar simplificando:")
                 for sublei in lei.split("/"):
-                    explic = LEIS_DIDATICAS.get(sublei.strip(), "Sem explicação detalhada.")
+                    explic = LEIS_DIDATICAS.get(sublei.strip(), "(sem explicação)")
                     print(f" - {sublei.strip()}: {explic}")
-                continue  # volta para o mesmo loop de passos
+                continue
 
-        # tentativa de passo intermediário
+        # passo intermediário
         try:
             passo_expr = parse_raw(tentativa)
             if find_counterexample(expr_atual, passo_expr) is None:
-                print("✓ Passo VÁLIDO!")
                 expr_atual = passo_expr
-                expr_str = tentativa
+                expr_str   = tentativa
                 passos.append(tentativa)
+                print("✓ Passo VÁLIDO!")
+
+                # verifica se já atingiu a forma mínima
+                fmt = format_expr(expr_atual)
+                fmt_lower = fmt.lower()
+                is_minimal = (
+                    fmt_lower == solucao_lower or
+                    (solucao_lower == 'true'  and fmt_lower in SINONIMOS_TRUE) or
+                    (solucao_lower == 'false' and fmt_lower in SINONIMOS_FALSE)
+                )
+                if is_minimal:
+                    print(f"⚡ Ótimo! Essa expressão ({fmt}) já é a forma mínima esperada.")
+                    print("   Se quiser finalizar, digite 'fim'.")
             else:
                 print("✗ Passo INVÁLIDO!")
-                print(f"Dica: esta questão envolve a(s) lei(s) de {lei}.")
+                print(f"Dica: esta questão usa a(s) lei(s) de {lei}.")
                 for sublei in lei.split("/"):
-                    explic = LEIS_DIDATICAS.get(sublei.strip(), "Sem explicação detalhada.")
+                    explic = LEIS_DIDATICAS.get(sublei.strip(), "(sem explicação)")
                     print(f" - {sublei.strip()}: {explic}")
         except Exception:
-            print("✗ Erro de sintaxe. Verifique os parênteses e operadores.")
-
+            print("✗ Erro de sintaxe. Verifique sua expressão.")
 
 def run_cli():
     database.inicializar_banco()
@@ -419,4 +441,3 @@ def run_cli():
 if __name__ == '__main__':
 
     run_cli()
-    
