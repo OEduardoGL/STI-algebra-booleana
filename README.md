@@ -108,6 +108,61 @@ Expressão Atual (true) -> Seu passo: fim
 
 ```
 
+## Arquitetura do Tutor Inteligente
+
+---
+
+### 🔍 Modelo Especialista (Domain/Expert Model)
+
+É onde está **todo o conhecimento de Álgebra Booleana** — regras, leis, algoritmos.
+
+- `src/sti/simplifier.py`:  
+  Implementa Quine–McCluskey, minterms e método de Petrick.
+
+- `src/sti/counterexample.py`:  
+  Valida equivalência lógica entre expressões.
+
+- `src/sti/parser.py` e `src/sti/formatter.py`:  
+  Cuidam de leitura e formatação das expressões.
+
+Sempre que o usuário dá um passo, o sistema recorre a esse modelo para validar, simplificar e encontrar contraexemplos.
+
+---
+
+### Modelo do Estudante (Student Model)
+
+Representa o **perfil e histórico de aprendizagem do usuário**. Está implementado via:
+
+- **Banco SQLite**
+  - Tabela `usuarios`: armazena `nivel_habilidade`.
+  - Tabela `historico`: armazena tentativas, acertos, erros, passos.
+
+- **Funções em `src/sti/database.py`**
+  - `get_or_create_user()`, `get_user_skill()`: recuperam dados do usuário.
+  - `update_user_skill()`: atualiza o nível após cada questão.
+  - `salvar_interacao()`: salva detalhes da tentativa.
+
+- **Modelo de Machine Learning**
+  - O `modelo_tutor.pkl` (treinado em `treinar_modelo.py`) aprende com o histórico para prever qual tipo de questão é ideal para o nível do aluno.
+
+---
+
+### Modelo Pedagógico (Pedagogical Model)
+
+Decide **o que e como ensinar**:
+
+- **Seleção de questões**
+  - `select_ideal_question_algoritmica()` usa regras fixas.
+  - `select_ideal_question_ml()` usa o modelo treinado para encontrar a melhor zona de aprendizagem.
+
+- **Feedback e dicas**
+  - O dicionário `LEIS_DIDATICAS` + lógica em `run_interactive_tutor()` (ou na view `/tutor`) fornece orientações sem dar a resposta.
+
+- **Encerramento**
+  - O sistema só aceita “fim” quando a expressão realmente chega à forma mínima.
+  - “Desisto” mostra a resposta correta.
+
+---
 
 ## Licença
 
