@@ -38,16 +38,18 @@ Para iniciar a ferramenta interativa, execute o script `cli.py`:
 
 ```bash
 python scripts/cli.py
+or python -m scripts.cli
 ```
-
-O programa irá então pedir para você escolher entre as opções de Simplificação ou Equivalência.
+Primeiramente, o programa precisará da sua conta, coloque seu nome para começar o programa, ele irá fazer 5 questões de proeficiência para determinar o nível de habilidade sua acerca do conteúdo.
+O programa irá então pedir para você escolher entre as opções de Simplificação, Equivalência, Tutor Inteligente ou Sair.
+Ademais, será salvo suas respostas em um banco, determinando a cada questão certa ou errada o seu nível de conhecimento, quanto mais proximo de zero (0), menor será seu conhecimento geral, e quanto mais próximo de dez (10), maior será ele.
 
 ## Exemplos de Uso
 
 ### 1. Simplificando uma Expressão
 
 ```plaintext
-Escolha: (1) Simplificação ou (2) Equivalência? 1
+Escolha: (1) Simplificação, (2) Equivalência, (3) Tutor Interativo ou (4) Sair? 1
 Digite expressão: A + A * B
 
 Passo a passo da simplificação:
@@ -92,6 +94,20 @@ Gerando Tabela-Verdade...
  F | V |    F     |    F    |           V
  F | F |    V     |    V    |           V
 ```
+
+### 3. Tutor Interativo
+
+```plaintext
+Questão (Dificuldade: 2, Lei principal: Complemento)
+Simplifique a expressão: A + ~A
+Quando terminar, digite 'fim'. Se quiser desistir, digite 'desisto'.
+----------------------------------------
+Expressão Atual (A + ~A) -> Seu passo: true
+✓ Passo VÁLIDO!
+Expressão Atual (true) -> Seu passo: fim
+
+```
+
 
 ## Licença
 

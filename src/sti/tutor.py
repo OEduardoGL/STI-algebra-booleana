@@ -253,6 +253,9 @@ def run_interactive_tutor(usuario_id):
     while True:
         s_passo_aluno = input(f"Expressão Atual ({expressao_atual_str}) -> Seu passo: ")
         if s_passo_aluno.lower().strip() == 'fim':
+            # choosen = input('\nDeseja criar a tabela verdade? [Y/N] ')
+            # if(choosen.strip().upper() == 'Y'):
+            #     create_trutable(s_inicial, expressao_atual_sympy)
             break
         elif s_passo_aluno.lower().strip() == 'desisto':
             print("\nEntendido, vamos encerrar essa questão.")
