@@ -112,7 +112,7 @@ Expressão Atual (true) -> Seu passo: fim
 
 ---
 
-### 🔍 Modelo Especialista (Domain/Expert Model)
+### Modelo Especialista (Domain/Expert Model)
 
 É onde está **todo o conhecimento de Álgebra Booleana** — regras, leis, algoritmos.
 
